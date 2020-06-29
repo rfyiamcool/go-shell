@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -40,13 +41,13 @@ func TestRunError(t *testing.T) {
 }
 
 func TestRunTimeout(t *testing.T) {
-	cmd := NewCommand("echo 123; sleep 5", WithTimeout(2))
+	cmd := NewCommand("sleep 10;echo 111", WithTimeout(2), WithShellMode())
 	cmd.Start()
 	cmd.Wait()
 	status := cmd.Status
 
 	assert.Equal(t, status.Error, ErrProcessTimeout)
-	assert.Greater(t, status.CostTime.Seconds(), float64(2))
+	assert.GreaterOrEqual(t, status.CostTime.Seconds(), float64(2))
 	assert.Less(t, status.CostTime.Seconds(), float64(3))
 }
 
@@ -102,4 +103,33 @@ func TestCheckBuffer(t *testing.T) {
 
 	assert.Equal(t, stdout.buf.String(), "123\n")
 	assert.Equal(t, stdout.Lines()[0], "123")
+}
+
+func TestCommand(t *testing.T) {
+	out, code, err := Command("echo 123")
+	assert.Equal(t, out, "123\n")
+	assert.Equal(t, code, 0)
+	assert.Equal(t, err, nil)
+
+	out, code, err = Command("ls -sdf07979")
+	assert.NotEqual(t, code, 0)
+	assert.NotEqual(t, err, nil)
+}
+
+func TestCommandWithMultiOut(t *testing.T) {
+	stdout, stderr, code, err := CommandWithMultiOut("echo 123 >&2")
+
+	assert.Equal(t, stdout, "")
+	assert.Equal(t, stderr, "123\n")
+	assert.Equal(t, code, 0)
+	assert.Equal(t, err, nil)
+}
+
+func TestCommandWithChan(t *testing.T) {
+	queue := make(chan string, 10)
+	err := CommandWithChan("echo 123;sleep 1;echo 456", queue)
+
+	time.Sleep(1500 * time.Millisecond)
+	assert.Equal(t, len(queue), 2)
+	assert.Equal(t, err, nil)
 }

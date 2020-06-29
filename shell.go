@@ -3,6 +3,7 @@ package shell
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"io"
 	"os/exec"
 	"strings"
@@ -20,17 +21,22 @@ var (
 	ErrNotExecutePermission = errors.New("not execute permission")
 	ErrInvalidArgs          = errors.New("Invalid argument to exit")
 	ErrProcessTimeout       = errors.New("throw process timeout")
+	ErrProcessCancel        = errors.New("active cancel process")
 )
 
 type Cmd struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	stdcmd *exec.Cmd
 
 	sync.Mutex
 
-	Bash   string
-	Status Status
-	Env    []string
-	Dir    string
+	Bash      string
+	ShellMode bool
+	Status    Status
+	Env       []string
+	Dir       string
 
 	isFinalized bool
 
@@ -57,6 +63,7 @@ type Status struct {
 
 type optionFunc func(*Cmd) error
 
+// WithTimeout command timeout, unit second
 func WithTimeout(td int) optionFunc {
 	if td < 0 {
 		panic("timeout > 0")
@@ -68,6 +75,23 @@ func WithTimeout(td int) optionFunc {
 	}
 }
 
+// WithShellMode set shell mode
+func WithShellMode() optionFunc {
+	return func(o *Cmd) error {
+		o.ShellMode = true
+		return nil
+	}
+}
+
+// WithExecMode set exec mode, example: ["curl", "-i", "-v", "xiaorui.cc"]
+func WithExecMode(b bool) optionFunc {
+	return func(o *Cmd) error {
+		o.ShellMode = false
+		return nil
+	}
+}
+
+// WithSetDir set work dir
 func WithSetDir(dir string) optionFunc {
 	return func(o *Cmd) error {
 		o.Dir = dir
@@ -75,6 +99,7 @@ func WithSetDir(dir string) optionFunc {
 	}
 }
 
+// WithSetEnv set env
 func WithSetEnv(env []string) optionFunc {
 	return func(o *Cmd) error {
 		o.Env = env
@@ -86,6 +111,7 @@ func NewCommand(bash string, options ...optionFunc) *Cmd {
 	c := &Cmd{
 		Bash:       bash,
 		Status:     Status{},
+		ShellMode:  true,
 		statusChan: make(chan Status, 1),
 		doneChan:   make(chan error, 1),
 	}
@@ -123,6 +149,14 @@ func (c *Cmd) Run() error {
 	return c.Wait()
 }
 
+func (c *Cmd) buildCtx() {
+	if c.timeout > 0 {
+		c.ctx, c.cancel = context.WithTimeout(context.Background(), time.Duration(c.timeout)*time.Second)
+	} else {
+		c.ctx, c.cancel = context.WithCancel(context.Background())
+	}
+}
+
 func (c *Cmd) run() error {
 	var (
 		cmd *exec.Cmd
@@ -130,17 +164,35 @@ func (c *Cmd) run() error {
 		output bytes.Buffer
 		stdout bytes.Buffer
 		stderr bytes.Buffer
+
+		sysProcAttr *syscall.SysProcAttr
 	)
 
 	defer func() {
+		if c.Status.Finish {
+			return
+		}
 		c.statusChan <- c.Status
 		c.finalize()
 	}()
 
+	c.buildCtx()
+
+	sysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
+
 	c.Status.startTime = time.Now()
-	cmd = exec.Command("bash", "-c", c.Bash)
+	if c.ShellMode {
+		cmd = exec.Command("bash", "-c", c.Bash)
+	} else {
+		args := strings.Split(c.Bash, " ")
+		cmd = exec.Command(args[0], args[1:]...)
+	}
+
 	cmd.Dir = c.Dir
 	cmd.Env = c.Env
+	cmd.SysProcAttr = sysProcAttr
 	c.stdcmd = cmd
 
 	// merge multi writer
@@ -158,10 +210,17 @@ func (c *Cmd) run() error {
 		return err
 	}
 
-	c.hanldeTimeout()
+	c.handleTimeout()
 
 	// join process
 	err = cmd.Wait()
+	if c.ctx.Err() == context.DeadlineExceeded {
+		return err
+	}
+	if c.ctx.Err() == context.Canceled {
+		return err
+	}
+
 	if err != nil {
 		c.Status.Error = formatExitCode(err)
 		return err
@@ -174,21 +233,29 @@ func (c *Cmd) run() error {
 	return err
 }
 
-func (c *Cmd) hanldeTimeout() {
+// handleTimeout if use commandContext timeout, can't match shell mode.
+func (c *Cmd) handleTimeout() {
 	if c.timeout <= 0 {
 		return
 	}
 
-	timer := time.NewTimer(time.Duration(c.timeout) * time.Second)
-	go func() {
+	call := func() {
 		select {
 		case <-c.doneChan:
-			// self exit
-		case <-timer.C:
+			// safe exit
+
+		case <-c.ctx.Done():
+			if c.ctx.Err() == context.Canceled {
+				c.Status.Error = ErrProcessCancel
+			}
+			if c.ctx.Err() == context.DeadlineExceeded {
+				c.Status.Error = ErrProcessTimeout
+			}
 			c.Stop()
-			c.Status.Error = ErrProcessTimeout
 		}
-	}()
+	}
+
+	time.AfterFunc(time.Duration(c.timeout)*time.Second, call)
 }
 
 func (c *Cmd) finalize() {
@@ -207,6 +274,7 @@ func (c *Cmd) finalize() {
 	// notify
 	close(c.doneChan)
 	close(c.statusChan)
+	c.isFinalized = true
 }
 
 // Stop kill -9 pid
@@ -215,8 +283,10 @@ func (c *Cmd) Stop() {
 		return
 	}
 
+	c.cancel()
 	c.finalize()
 	c.stdcmd.Process.Kill()
+	syscall.Kill(-c.stdcmd.Process.Pid, syscall.SIGKILL)
 }
 
 // Kill send custom signal to process
@@ -244,7 +314,7 @@ func formatExitCode(err error) error {
 		return ErrInvalidArgs
 	}
 
-	return nil
+	return err
 }
 
 func CheckCmdExists(cmd string) bool {
@@ -263,25 +333,22 @@ func Command(args string) (string, int, error) {
 	return out, cmd.ProcessState.ExitCode(), err
 }
 
-func CommandWithMultiOut(cmd string, workPath string) (string, string, error) {
+func CommandWithMultiOut(cmd string) (string, string, int, error) {
 	var (
 		stdout, stderr bytes.Buffer
 		err            error
 	)
 
 	runner := exec.Command("bash", "-c", cmd)
-	if workPath != "" {
-		runner.Dir = workPath
-	}
 	runner.Stdout = &stdout
 	runner.Stderr = &stderr
 	err = runner.Start()
 	if err != nil {
-		return string(stdout.Bytes()), string(stderr.Bytes()), err
+		return string(stdout.Bytes()), string(stderr.Bytes()), runner.ProcessState.ExitCode(), err
 	}
 
 	err = runner.Wait()
-	return string(stdout.Bytes()), string(stderr.Bytes()), err
+	return string(stdout.Bytes()), string(stderr.Bytes()), runner.ProcessState.ExitCode(), err
 }
 
 func CommandWithChan(cmd string, queue chan string) error {

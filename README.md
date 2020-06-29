@@ -1,8 +1,21 @@
+![logo.png](logo.png)
+
 # go-shell
 
 easy execute shell, better `os/exec`
 
+## Feature
+
+* simple api
+* add timeout
+* add stop()
+* use channel to send stdout and stderr
+* merge stdout and stderr to new output
+* use sync.pool to reduce alloc buffer
+
 ## Usage
+
+😁 **Look at the code for yourself**
 
 ```
 func TestRunShell(t *testing.T) {
@@ -16,6 +29,16 @@ func TestRunShell(t *testing.T) {
 	assert.Equal(t, status.Finish, true)
 	assert.Greater(t, status.PID, 0)
 	assert.GreaterOrEqual(t, cmd.Status.CostTime.Seconds(), float64(2))
+}
+
+func TestCheckOutput(t *testing.T) {
+	cmd := NewCommand("echo 123123 >&2")
+	cmd.Run()
+	status := cmd.Status
+
+	assert.Equal(t, status.Output, "123123\n")
+	assert.Equal(t, status.Stdout, "")
+	assert.Equal(t, status.Stderr, "123123\n")
 }
 
 func TestRunTimeout(t *testing.T) {
