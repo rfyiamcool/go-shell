@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os/exec"
 	"strings"
@@ -317,6 +318,7 @@ func formatExitCode(err error) error {
 	return err
 }
 
+// CheckCmdExists check command in the PATH
 func CheckCmdExists(cmd string) bool {
 	_, err := exec.LookPath(cmd)
 	if err != nil {
@@ -326,11 +328,43 @@ func CheckCmdExists(cmd string) bool {
 	}
 }
 
+// CheckPnameRunning easy method
+func CheckPnameRunning(pname string) bool {
+	out, _, _ := CommandFormat("ps aux | grep %s |grep -v grep", pname)
+	if strings.Contains(out, pname) {
+		return true
+	}
+	return false
+}
+
+// Command easy command
 func Command(args string) (string, int, error) {
 	cmd := exec.Command("bash", "-c", args)
 	outbs, err := cmd.CombinedOutput()
 	out := string(outbs)
 	return out, cmd.ProcessState.ExitCode(), err
+}
+
+// Command easy command format
+func CommandFormat(format string, vals ...interface{}) (string, int, error) {
+	sh := fmt.Sprintf(format, vals...)
+	return Command(sh)
+}
+
+// CommandContains easy command, then match output with multi substr
+func CommandContains(args string, subs ...string) bool {
+	outbs, _, err := Command(args)
+	if err != nil {
+		return false
+	}
+
+	out := string(outbs)
+	for _, sub := range subs {
+		if !strings.Contains(out, sub) {
+			return false
+		}
+	}
+	return true
 }
 
 func CommandWithMultiOut(cmd string) (string, string, int, error) {
