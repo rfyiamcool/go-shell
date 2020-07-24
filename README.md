@@ -9,6 +9,7 @@ easy execute shell, better `os/exec`
 * simple api
 * add timeout
 * add stop()
+* add yum api
 * use channel to send stdout and stderr
 * merge stdout and stderr to new output
 * use sync.pool to reduce alloc buffer
@@ -17,7 +18,7 @@ easy execute shell, better `os/exec`
 
 😁 **Look at the code for yourself**
 
-```
+```golang
 func TestRunShell(t *testing.T) {
 	cmd := NewCommand("ls;ls -sdf8;sleep 2;echo 123456")
 	cmd.Start()

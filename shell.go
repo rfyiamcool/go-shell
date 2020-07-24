@@ -337,7 +337,7 @@ func CheckPnameRunning(pname string) bool {
 	return false
 }
 
-// Command easy command
+// Command easy command, return CombinedOutput, exitcode, err
 func Command(args string) (string, int, error) {
 	cmd := exec.Command("bash", "-c", args)
 	outbs, err := cmd.CombinedOutput()
@@ -345,7 +345,7 @@ func Command(args string) (string, int, error) {
 	return out, cmd.ProcessState.ExitCode(), err
 }
 
-// Command easy command format
+// Command easy command format, return CombinedOutput, exitcode, err
 func CommandFormat(format string, vals ...interface{}) (string, int, error) {
 	sh := fmt.Sprintf(format, vals...)
 	return Command(sh)
@@ -367,6 +367,7 @@ func CommandContains(args string, subs ...string) bool {
 	return true
 }
 
+// CommandWithMultiOut run command and return multi result; return string(stdout), string(stderr), exidcode, err
 func CommandWithMultiOut(cmd string) (string, string, int, error) {
 	var (
 		stdout, stderr bytes.Buffer
@@ -385,6 +386,7 @@ func CommandWithMultiOut(cmd string) (string, string, int, error) {
 	return string(stdout.Bytes()), string(stderr.Bytes()), runner.ProcessState.ExitCode(), err
 }
 
+// CommandWithChan return result queue
 func CommandWithChan(cmd string, queue chan string) error {
 	runner := exec.Command("bash", "-c", cmd)
 	stdout, err := runner.StdoutPipe()

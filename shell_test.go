@@ -2,6 +2,8 @@ package shell
 
 import (
 	"fmt"
+	"io/ioutil"
+	"os"
 	"os/exec"
 	"testing"
 	"time"
@@ -25,6 +27,33 @@ func TestRunShell(t *testing.T) {
 	assert.Equal(t, status.Finish, true)
 	assert.Greater(t, status.PID, 0)
 	assert.GreaterOrEqual(t, cmd.Status.CostTime.Seconds(), float64(2))
+}
+
+func TestRunScript(t *testing.T) {
+	js := `
+	echo -n 1
+	echo -n 2
+	echo -n 3
+	`
+	cmd := NewCommand(js)
+	cmd.Start()
+	cmd.Wait()
+
+	t.Log(cmd.Status.Output)
+	assert.Equal(t, cmd.Status.Output, "123")
+}
+
+func TestRunScriptFile(t *testing.T) {
+	js := `
+	echo -n 1
+	echo -n 2
+	echo -n 3
+	`
+	fpath := "/tmp/go-shell-js-test"
+	err := ioutil.WriteFile(fpath, []byte(js), os.ModePerm)
+	assert.Nil(t, err, nil)
+	out, _, _ := CommandFormat("bash %s", fpath)
+	assert.Equal(t, out, "123")
 }
 
 func TestRunError(t *testing.T) {
