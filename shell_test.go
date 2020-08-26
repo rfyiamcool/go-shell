@@ -11,16 +11,36 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestFastStop(t *testing.T) {
+	start := time.Now()
+	cmd := NewCommand("sleep 5;echo 123;sleep 123")
+	cmd.Start()
+	cmd.Stop()
+	end := time.Since(start)
+	assert.Less(t, end.Seconds(), float64(2))
+	time.Sleep(10 * time.Second)
+}
+
+func TestDelayStop(t *testing.T) {
+	start := time.Now()
+	cmd := NewCommand("sleep 5;echo 123;sleep 123")
+	cmd.Start()
+
+	go func() {
+		time.Sleep(1 * time.Second)
+		cmd.Stop()
+	}()
+
+	cmd.Wait()
+	end := time.Since(start)
+	assert.Less(t, end.Seconds(), float64(2))
+}
+
 func TestRunShell(t *testing.T) {
 	cmd := NewCommand("ls;ls -sdf8;sleep 2;echo 123456")
 	cmd.Start()
 	cmd.Wait()
 	status := cmd.Status
-
-	fmt.Printf("finish: %v \n", status.Finish)
-	fmt.Printf("output:\n%s \n------\n", status.Output)
-	fmt.Printf("stdout:\n%s \n------\n", status.Stdout)
-	fmt.Printf("stderr:\n%s \n------\n", status.Stderr)
 
 	assert.Equal(t, status.ExitCode, 0)
 	assert.Equal(t, status.Error, nil)
@@ -80,28 +100,38 @@ func TestRunTimeout(t *testing.T) {
 	assert.Less(t, status.CostTime.Seconds(), float64(3))
 }
 
-func TestCheckStdout(t *testing.T) {
-	cmd := NewCommand("echo 123123")
-	cmd.Run()
+func TestCheckStderr(t *testing.T) {
+	cmd := NewCommand("echo -n \"123123\" >&2")
+	cmd.Run() // start and wait
 	status := cmd.Status
 
-	assert.Equal(t, status.Stdout, "123123\n")
-	assert.Equal(t, status.Output, "123123\n")
-	assert.Equal(t, status.Stderr, "")
+	assert.Equal(t, status.Stdout, "")
+	assert.Equal(t, status.Output, "123123")
+	assert.Equal(t, status.Stderr, "123123")
+}
+
+func TestCheckOutput1(t *testing.T) {
+	cmd := NewCommand("lll sdf") // error command
+	cmd.Run()                    // start and wait
+	status := cmd.Status
+
+	assert.Equal(t, status.Stdout, "")
+	assert.NotEqual(t, status.Output, "")
+	assert.NotEqual(t, status.Stderr, "")
 }
 
 func TestCheckOutput(t *testing.T) {
-	cmd := NewCommand("echo 123123 >&2")
-	cmd.Run()
+	cmd := NewCommand("echo -n 123123")
+	cmd.Run() // start and wait
 	status := cmd.Status
 
-	assert.Equal(t, status.Output, "123123\n")
-	assert.Equal(t, status.Stdout, "")
-	assert.Equal(t, status.Stderr, "123123\n")
+	assert.Equal(t, status.Output, "123123")
+	assert.Equal(t, status.Stdout, "123123")
+	assert.Equal(t, status.Stderr, "")
 }
 
 func TestCheckExit127(t *testing.T) {
-	cmd := NewCommand("xiaorui.cc")
+	cmd := NewCommand("xiaorui.cc") // not exist command
 	cmd.Run()
 	assert.Equal(t, cmd.Status.Error, ErrNotFoundCommand)
 }

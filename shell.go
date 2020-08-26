@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/ioutil"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -18,11 +20,14 @@ import (
 var (
 	ErrLineBufferOverflow = errors.New("line buffer overflow")
 
+	ErrAlreadyFinished      = errors.New("already finished")
 	ErrNotFoundCommand      = errors.New("command not found")
 	ErrNotExecutePermission = errors.New("not execute permission")
 	ErrInvalidArgs          = errors.New("Invalid argument to exit")
 	ErrProcessTimeout       = errors.New("throw process timeout")
 	ErrProcessCancel        = errors.New("active cancel process")
+
+	DefaultExitCode = 2
 )
 
 type Cmd struct {
@@ -45,6 +50,10 @@ type Cmd struct {
 
 	statusChan chan Status
 	doneChan   chan error
+
+	output bytes.Buffer // stdout + stderr
+	stdout bytes.Buffer
+	stderr bytes.Buffer
 }
 
 type Status struct {
@@ -53,8 +62,8 @@ type Status struct {
 	ExitCode int
 	Error    error
 	CostTime time.Duration
-	Output   string
 
+	Output string // stdout + stderr
 	Stdout string
 	Stderr string
 
@@ -128,14 +137,12 @@ func (c *Cmd) Clone() *Cmd {
 }
 
 // Start async execute command
-func (c *Cmd) Start() chan Status {
+func (c *Cmd) Start() error {
 	if c.Status.Finish {
-		return c.statusChan
+		return ErrAlreadyFinished
 	}
 
-	go c.run()
-
-	return c.statusChan
+	return c.run()
 }
 
 // Wait wait command finish
@@ -162,20 +169,8 @@ func (c *Cmd) run() error {
 	var (
 		cmd *exec.Cmd
 
-		output bytes.Buffer
-		stdout bytes.Buffer
-		stderr bytes.Buffer
-
 		sysProcAttr *syscall.SysProcAttr
 	)
-
-	defer func() {
-		if c.Status.Finish {
-			return
-		}
-		c.statusChan <- c.Status
-		c.finalize()
-	}()
 
 	c.buildCtx()
 
@@ -194,27 +189,41 @@ func (c *Cmd) run() error {
 	cmd.Dir = c.Dir
 	cmd.Env = c.Env
 	cmd.SysProcAttr = sysProcAttr
-	c.stdcmd = cmd
 
 	// merge multi writer
-	mergeStdout := io.MultiWriter(&output, &stdout)
-	mergeStderr := io.MultiWriter(&output, &stderr)
+	mergeStdout := io.MultiWriter(&c.output, &c.stdout)
+	mergeStderr := io.MultiWriter(&c.output, &c.stderr)
 
 	// reset writer
 	cmd.Stdout = mergeStdout
 	cmd.Stderr = mergeStderr
+	c.stdcmd = cmd
 
 	// async start
-	err := cmd.Start()
+	err := c.stdcmd.Start()
 	if err != nil {
 		c.Status.Error = err
 		return err
 	}
 
+	go c.handleWait()
+
+	return nil
+}
+
+func (c *Cmd) handleWait() error {
+	defer func() {
+		if c.Status.Finish {
+			return
+		}
+		c.statusChan <- c.Status
+		c.finalize()
+	}()
+
 	c.handleTimeout()
 
 	// join process
-	err = cmd.Wait()
+	err := c.stdcmd.Wait()
 	if c.ctx.Err() == context.DeadlineExceeded {
 		return err
 	}
@@ -227,11 +236,10 @@ func (c *Cmd) run() error {
 		return err
 	}
 
-	c.Status.Stdout = stdout.String()
-	c.Status.Stderr = stderr.String()
-	c.Status.Output = output.String()
-
-	return err
+	c.Status.Stdout = c.stdout.String()
+	c.Status.Stderr = c.stderr.String()
+	c.Status.Output = c.output.String()
+	return nil
 }
 
 // handleTimeout if use commandContext timeout, can't match shell mode.
@@ -280,7 +288,7 @@ func (c *Cmd) finalize() {
 
 // Stop kill -9 pid
 func (c *Cmd) Stop() {
-	if c.stdcmd.Process == nil {
+	if c.stdcmd == nil || c.stdcmd.Process == nil {
 		return
 	}
 
@@ -365,6 +373,20 @@ func CommandContains(args string, subs ...string) bool {
 		}
 	}
 	return true
+}
+
+// CommandScript write script to random fname in /tmp directory and bash execute
+func CommandScript(script []byte) (string, int, error) {
+	fpath := fmt.Sprintf("/tmp/go-shell-%s", randString(16))
+	defer os.RemoveAll(fpath)
+
+	err := ioutil.WriteFile(fpath, script, 0666)
+	if err != nil {
+		return "", DefaultExitCode, errors.Errorf("dump script to file failed, err: %s", err.Error())
+	}
+
+	out, code, err := CommandFormat("bash %s", fpath)
+	return out, code, err
 }
 
 // CommandWithMultiOut run command and return multi result; return string(stdout), string(stderr), exidcode, err
