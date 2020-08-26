@@ -19,27 +19,39 @@ easy execute shell, better `os/exec`
 😁 **Look at the code for yourself**
 
 ```golang
-func TestRunShell(t *testing.T) {
-	cmd := NewCommand("ls;ls -sdf8;sleep 2;echo 123456")
-	cmd.Start()
-	cmd.Wait()
+func TestCheckOutput(t *testing.T) {
+	cmd := NewCommand("echo -n 123123")
+	cmd.Run() // start and wait
 	status := cmd.Status
 
-	assert.Equal(t, status.ExitCode, 0)
-	assert.Equal(t, status.Error, nil)
-	assert.Equal(t, status.Finish, true)
-	assert.Greater(t, status.PID, 0)
-	assert.GreaterOrEqual(t, cmd.Status.CostTime.Seconds(), float64(2))
+	assert.Equal(t, status.Output, "123123")
+	assert.Equal(t, status.Stdout, "123123")
+	assert.Equal(t, status.Stderr, "")
 }
 
-func TestCheckOutput(t *testing.T) {
-	cmd := NewCommand("echo 123123 >&2")
-	cmd.Run()
+func TestCheckStderr(t *testing.T) {
+	cmd := NewCommand("echo -n \"123123\" >&2")
+	cmd.Run() // start and wait
 	status := cmd.Status
 
-	assert.Equal(t, status.Output, "123123\n")
 	assert.Equal(t, status.Stdout, "")
-	assert.Equal(t, status.Stderr, "123123\n")
+	assert.Equal(t, status.Output, "123123")
+	assert.Equal(t, status.Stderr, "123123")
+}
+
+func TestDelayStop(t *testing.T) {
+	start := time.Now()
+	cmd := NewCommand("sleep 5;echo 123;sleep 123")
+	cmd.Start() // async start
+
+	go func() {
+		time.Sleep(1 * time.Second)
+		cmd.Stop()
+	}()
+
+	cmd.Wait() // wait
+	end := time.Since(start)
+	assert.Less(t, end.Seconds(), float64(2))
 }
 
 func TestRunTimeout(t *testing.T) {
@@ -53,14 +65,14 @@ func TestRunTimeout(t *testing.T) {
 	assert.Less(t, status.CostTime.Seconds(), float64(3))
 }
 
-func TestCheckStdout(t *testing.T) {
-	cmd := NewCommand("echo 123123")
-	cmd.Run()
+func TestCheckStderr(t *testing.T) {
+	cmd := NewCommand("echo -n \"123123\" >&2") // echo stderr
+	cmd.Run() // start and wait
 	status := cmd.Status
 
-	assert.Equal(t, status.Stdout, "123123\n")
-	assert.Equal(t, status.Output, "123123\n")
-	assert.Equal(t, status.Stderr, "")
+	assert.Equal(t, status.Stdout, "")
+	assert.Equal(t, status.Output, "123123")
+	assert.Equal(t, status.Stderr, "123123")
 }
 
 func TestCheckStream(t *testing.T) {

@@ -18,20 +18,19 @@ func TestFastStop(t *testing.T) {
 	cmd.Stop()
 	end := time.Since(start)
 	assert.Less(t, end.Seconds(), float64(2))
-	time.Sleep(10 * time.Second)
 }
 
 func TestDelayStop(t *testing.T) {
 	start := time.Now()
 	cmd := NewCommand("sleep 5;echo 123;sleep 123")
-	cmd.Start()
+	cmd.Start() // async start
 
 	go func() {
 		time.Sleep(1 * time.Second)
 		cmd.Stop()
 	}()
 
-	cmd.Wait()
+	cmd.Wait() // wait
 	end := time.Since(start)
 	assert.Less(t, end.Seconds(), float64(2))
 }
@@ -110,7 +109,7 @@ func TestCheckStderr(t *testing.T) {
 	assert.Equal(t, status.Stderr, "123123")
 }
 
-func TestCheckOutput1(t *testing.T) {
+func TestCheckError(t *testing.T) {
 	cmd := NewCommand("lll sdf") // error command
 	cmd.Run()                    // start and wait
 	status := cmd.Status
